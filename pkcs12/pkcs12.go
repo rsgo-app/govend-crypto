@@ -267,6 +267,54 @@ func Decode(pfxData []byte, password string) (privateKey interface{}, certificat
 	return
 }
 
+// Decode extracts a certificate and private key from pfxData. This function
+// assumes that there is only one certificate and only one private key in the
+// pfxData.
+func DecodeExt(pfxData []byte, password string) (privateKey interface{}, certificates []*x509.Certificate, err error) {
+	encodedPassword, err := bmpString(password)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	bags, encodedPassword, err := getSafeContents(pfxData, encodedPassword)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	for _, bag := range bags {
+		switch {
+		case bag.Id.Equal(oidCertBag):
+			certsData, err := decodeCertBag(bag.Value.Bytes)
+			if err != nil {
+				return nil, nil, err
+			}
+			certs, err := x509.ParseCertificates(certsData)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			if len(certs) > 0 {
+				certificates = append(certificates, certs...)
+			}
+
+		case bag.Id.Equal(oidPKCS8ShroundedKeyBag):
+			if privateKey != nil {
+				err = errors.New("pkcs12: expected exactly one key bag")
+			}
+
+			if privateKey, err = decodePkcs8ShroudedKeyBag(bag.Value.Bytes, encodedPassword); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
+
+	if privateKey == nil {
+		return nil, nil, errors.New("pkcs12: private key missing")
+	}
+
+	return
+}
+
 func getSafeContents(p12Data, password []byte) (bags []safeBag, updatedPassword []byte, err error) {
 	pfx := new(pfxPdu)
 	if err := unmarshal(p12Data, pfx); err != nil {
